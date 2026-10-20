@@ -27,7 +27,7 @@ pipeline {
 
         // EKS: one cluster and namespace per environment
         EKS_CLUSTER   = "mycompany-${params.ENVIRONMENT}-eks"
-        AWS_REGION    = 'us-east-1'
+        AWS_REGION    = 'ap-south-1'
         K8S_NAMESPACE = "hr-portal-${params.ENVIRONMENT}"
 
         // Helm values: global chart defaults + environment overrides + environment variables

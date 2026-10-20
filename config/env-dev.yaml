@@ -4,8 +4,8 @@
 # Passwords and other secrets belong in AWS Secrets Manager, not here.
 # ===============================================================
 env:
-  # CHANGE ME: dev RDS endpoint
-  DB_HOST: "enterprise-hr-dev.xxxxxxxxxxxx.us-east-1.rds.amazonaws.com"
+  # CHANGE ME: dev RDS endpoint (infra repo: terraform output rds_endpoint)
+  DB_HOST: "enterprise-hr-dev.xxxxxxxxxxxx.ap-south-1.rds.amazonaws.com"
   DB_NAME: "employee_db"
   DB_SSL_MODE: "require"
   # More detailed application logs in dev (Spring maps this to logging.level.com.example.employee)

@@ -2,7 +2,8 @@
 
 Jenkins CI/CD pipeline, Dockerfile and Helm chart that build and deploy
 [Enterprise HR Portal](https://github.com/srikanth78933/Enterprise-HR-Management-System) to AWS EKS,
-for the **dev** and **prod** environments.
+for the **dev** and **prod** environments. The AWS infrastructure (VPC, EKS, RDS, IRSA roles,
+cluster add-ons) comes from [enterprise-hr-portal-infra](https://github.com/srikanth78933/enterprise-hr-portal-infra).
 
 ```
 Git ─► Maven (build + tests) ─► SonarQube (+ quality gate) ─► Nexus (JAR)
@@ -31,10 +32,10 @@ enterprise-hr-portal-deploy/
         ├── secretproviderclass.yaml  "secrets.keys" from AWS Secrets Manager
         ├── serviceaccount.yaml       IAM role (IRSA) allowed to read the secret
         ├── deployment.yaml           Pods, probes, ConfigMap + secret wiring
-        ├── service.yaml              LoadBalancer (or ClusterIP with Ingress)
+        ├── service.yaml              ClusterIP Service behind the ALB
         ├── hpa.yaml                  Autoscaling on CPU/memory
         ├── pdb.yaml                  Keeps pods available during node drains
-        ├── ingress.yaml              Optional ALB Ingress (disabled by default)
+        ├── ingress.yaml              Internet-facing ALB (optional HTTPS and WAF)
         ├── _helpers.tpl              Shared labels
         └── NOTES.txt                 Shown after install
 ```
@@ -107,19 +108,21 @@ Docker image tag, Helm chart version and app version.
 
 ## Values to change before the first run
 
+Create the infrastructure first (see *7. Infrastructure* below). Terraform prints the values with
+`terraform output deploy_repo_values`.
+
 | File                              | Value                    | Set it to |
 |-----------------------------------|--------------------------|-----------|
 | `Jenkinsfile`                     | `NEXUS_URL`              | `http://<nexus-ec2-ip>:8081` |
 | `Jenkinsfile`                     | `DOCKER_IMAGE`           | `<your-dockerhub-user>/enterprise-hr-portal` |
-| `Jenkinsfile`                     | `EKS_CLUSTER`            | Cluster name pattern (default `mycompany-<env>-eks`) |
-| `Jenkinsfile`                     | `AWS_REGION`             | Region of the clusters and Secrets Manager |
-| `config/env-dev.yaml`             | `env.DB_HOST`            | Dev RDS endpoint |
-| `config/env-prod.yaml`            | `env.DB_HOST`            | Prod RDS endpoint |
-| `environments/dev/values.yaml`    | `serviceAccount.roleArn` | Dev IAM role ARN (setup step 8d) |
-| `environments/prod/values.yaml`   | `serviceAccount.roleArn` | Prod IAM role ARN (setup step 8d) |
+| `Jenkinsfile`                     | `AWS_REGION`             | Region of the infrastructure (default `ap-south-1`) |
+| `config/env-<env>.yaml`           | `env.DB_HOST`            | Terraform output `rds_endpoint` |
+| `environments/<env>/values.yaml`  | `serviceAccount.roleArn` | Terraform output `app_irsa_role_arn` |
+| `environments/prod/values.yaml`   | `ingress.wafAclArn`      | Terraform output `waf_web_acl_arn` |
+| `environments/<env>/values.yaml`  | `ingress.certificateArn` | Optional ACM certificate ARN for HTTPS |
 
-If dev and prod share one cluster, set `EKS_CLUSTER` to that fixed name; the namespaces
-(`hr-portal-dev`, `hr-portal-prod`) keep them separate.
+`EKS_CLUSTER` (`mycompany-<env>-eks`) and the secret name (`enterprise-hr-portal/<env>/db`)
+already match the infra repo.
 
 ## One-time setup
 
@@ -192,114 +195,35 @@ The pipeline uploads to the default **`maven-releases`** repository
 (`<NEXUS_URL>/repository/maven-releases/`). Release repositories reject the same version twice,
 which is why each build gets its own `1.0.<BUILD_NUMBER>` version.
 
-### 7. EKS access for the Jenkins IAM user (each cluster)
+### 7. Infrastructure (Terraform)
+
+Everything on the AWS side is created by
+[enterprise-hr-portal-infra](https://github.com/srikanth78933/enterprise-hr-portal-infra),
+once per environment:
+
+| Created by Terraform                                   | Used here for |
+|--------------------------------------------------------|---------------|
+| VPC with frontend / compute / data subnets             | ALB, pods, RDS |
+| EKS cluster `mycompany-<env>-eks` + node group         | Jenkins deploy target |
+| EKS access entry for the Jenkins IAM user (`cluster_admin_arns`) | `helm upgrade` from Jenkins |
+| RDS PostgreSQL + secret `enterprise-hr-portal/<env>/db` | `DB_HOST`, `DB_USERNAME`, `DB_PASSWORD` |
+| IRSA role `enterprise-hr-portal-<env>-secrets-role`    | `serviceAccount.roleArn` |
+| AWS Load Balancer Controller                           | Creates the ALB from `ingress.yaml` |
+| Secrets Store CSI driver + AWS provider                | `secretproviderclass.yaml` |
+| metrics-server, Cluster Autoscaler                     | `hpa.yaml`, extra nodes when pods don't fit |
+| WAF web ACL (prod)                                     | `ingress.wafAclArn` |
 
 ```bash
-aws eks create-access-entry --cluster-name <cluster> --region <region> \
-  --principal-arn arn:aws:iam::<account-id>:user/<jenkins-iam-user>
-
-aws eks associate-access-policy --cluster-name <cluster> --region <region> \
-  --principal-arn arn:aws:iam::<account-id>:user/<jenkins-iam-user> \
-  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
-  --access-scope type=cluster
+cd enterprise-hr-portal-infra/environments/dev   # or prod
+terraform init && terraform apply
+terraform output deploy_repo_values              # copy these into this repo (table above)
 ```
 
-### 8. Database and AWS Secrets Manager (repeat for dev and prod)
+The IRSA role trusts exactly namespace `hr-portal-<env>` and ServiceAccount `enterprise-hr-portal`
+(the Helm release name). Keep those names as they are.
 
-Run these from a machine with `aws`, `eksctl`, `kubectl` and `helm` configured for the cluster.
-Set `ENV` to `dev` first, then repeat everything with `ENV=prod`.
-
-```bash
-export ENV=dev                       # then: prod
-export CLUSTER=mycompany-${ENV}-eks
-export REGION=us-east-1
-export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-```
-
-**a) RDS PostgreSQL**
-
-1. Create an RDS PostgreSQL instance with initial database name **`employee_db`**
-   (Flyway creates the tables on the first application start).
-2. Allow inbound **TCP 5432** on the RDS security group from the EKS node security group.
-3. Put the RDS endpoint in `config/env-${ENV}.yaml` → `env.DB_HOST`.
-
-**b) Store the DB credentials in Secrets Manager**
-
-```bash
-aws secretsmanager create-secret --region $REGION \
-  --name enterprise-hr-portal/${ENV}/db \
-  --secret-string '{"username":"<db-user>","password":"<db-password>"}'
-```
-
-The password exists only in Secrets Manager: never in Git, Jenkins or Helm values.
-
-**c) Install the Secrets Store CSI driver and the AWS provider (once per cluster)**
-
-```bash
-helm repo add secrets-store-csi-driver https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts
-helm repo add aws-secrets-manager https://aws.github.io/secrets-store-csi-driver-provider-aws
-helm repo update
-
-# syncSecret.enabled=true lets the driver copy the values into a Kubernetes Secret
-helm install csi-secrets-store secrets-store-csi-driver/secrets-store-csi-driver \
-  -n kube-system --set syncSecret.enabled=true
-
-helm install secrets-provider-aws aws-secrets-manager/secrets-store-csi-driver-provider-aws \
-  -n kube-system
-```
-
-**d) IAM role for the application's ServiceAccount (IRSA)**
-
-```bash
-eksctl utils associate-iam-oidc-provider --cluster $CLUSTER --region $REGION --approve
-
-cat > secrets-policy-${ENV}.json <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"],
-    "Resource": "arn:aws:secretsmanager:${REGION}:${ACCOUNT_ID}:secret:enterprise-hr-portal/${ENV}/db-*"
-  }]
-}
-EOF
-
-aws iam create-policy --policy-name enterprise-hr-portal-${ENV}-secrets-policy \
-  --policy-document file://secrets-policy-${ENV}.json
-
-# --role-only: creates just the IAM role; the ServiceAccount itself comes from the Helm chart
-eksctl create iamserviceaccount --cluster $CLUSTER --region $REGION \
-  --namespace hr-portal-${ENV} --name enterprise-hr-portal \
-  --role-name enterprise-hr-portal-${ENV}-secrets-role \
-  --attach-policy-arn arn:aws:iam::${ACCOUNT_ID}:policy/enterprise-hr-portal-${ENV}-secrets-policy \
-  --role-only --approve
-```
-
-Put `arn:aws:iam::<account-id>:role/enterprise-hr-portal-<env>-secrets-role` in
-`environments/<env>/values.yaml` → `serviceAccount.roleArn`. Each role trusts exactly one
-namespace + ServiceAccount pair, so the dev pods cannot read the prod secret and vice versa.
-
-**e) metrics-server (needed by the HPA, once per cluster)**
-
-```bash
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-kubectl top nodes   # works after ~1 minute
-```
-
-**Rotating the password:** update the secret in Secrets Manager, then restart the pods with
-`kubectl rollout restart deploy/enterprise-hr-portal -n hr-portal-<env>`.
-
-### 9. Optional: ALB Ingress instead of a LoadBalancer Service
-
-If the AWS Load Balancer Controller is installed, set in `environments/<env>/values.yaml`:
-
-```yaml
-service:
-  type: ClusterIP
-ingress:
-  enabled: true
-  host: "hr-dev.example.com"   # optional
-```
+**Before destroying an environment**, run `helm uninstall enterprise-hr-portal -n hr-portal-<env>`
+so the AWS Load Balancer Controller deletes the ALB; otherwise the VPC cannot be removed.
 
 ## Create the Jenkins job
 
@@ -316,12 +240,13 @@ For `prod`, the pipeline pauses at **Approve Production**; click **Deploy** in t
 ## Open the application
 
 ```bash
-kubectl get pods,svc,hpa,pdb -n hr-portal-dev
-kubectl get svc enterprise-hr-portal -n hr-portal-dev -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+kubectl get pods,svc,ingress,hpa,pdb -n hr-portal-dev
+kubectl get ingress enterprise-hr-portal -n hr-portal-dev -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
 ```
 
-Open `http://<load-balancer-hostname>` in the browser (allow 2–3 minutes for the load balancer DNS).
-Use `hr-portal-prod` for production.
+Open `http://<alb-hostname>` in the browser (the ALB takes 2–3 minutes to become reachable after
+the first deploy). With `ingress.certificateArn` set, use `https://` and point your domain's
+Route 53 alias record at the ALB. Use `hr-portal-prod` for production.
 
 ## Pipeline stages
 

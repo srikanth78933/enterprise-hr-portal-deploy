@@ -37,7 +37,7 @@ env:
 secrets:
   awsSecretName: ""
   # Jenkins sets this from AWS_REGION
-  region: "us-east-1"
+  region: "ap-south-1"
   keys:
     DB_USERNAME: username
     DB_PASSWORD: password
@@ -47,17 +47,22 @@ secrets:
 serviceAccount:
   roleArn: ""
 
-# Service. LoadBalancer creates an AWS load balancer; use ClusterIP with the Ingress.
+# Service inside the cluster; the ALB (Ingress below) is the only way in from the internet
 service:
-  type: LoadBalancer
+  type: ClusterIP
   port: 80
 
-# Ingress (optional). Requires the AWS Load Balancer Controller in the cluster.
+# Ingress -> internet-facing ALB in the frontend subnets, created by the AWS Load Balancer
+# Controller (installed by the infra repo). The ALB sends traffic straight to the pod IPs.
 ingress:
-  enabled: false
+  enabled: true
   className: alb
-  # Leave empty to accept any host name
+  # Leave empty to accept any host name (use the ALB's AWS DNS name)
   host: ""
+  # ACM certificate ARN. When set, the ALB listens on 443 and redirects 80 -> 443.
+  certificateArn: ""
+  # WAF web ACL ARN (terraform output waf_web_acl_arn). Empty = no WAF.
+  wafAclArn: ""
 
 # HorizontalPodAutoscaler (requires metrics-server in the cluster)
 autoscaling:

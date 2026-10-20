@@ -8,6 +8,7 @@ secrets:
   awsSecretName: "enterprise-hr-portal/dev/db"
 
 # CHANGE ME: IAM role (IRSA) allowed to read the dev secret
+# (infra repo: terraform output app_irsa_role_arn)
 serviceAccount:
   roleArn: "arn:aws:iam::123456789012:role/enterprise-hr-portal-dev-secrets-role"
 
