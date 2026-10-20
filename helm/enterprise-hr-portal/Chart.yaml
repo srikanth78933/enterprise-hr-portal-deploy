@@ -1,0 +1,7 @@
+apiVersion: v2
+name: enterprise-hr-portal
+description: Helm chart for Enterprise HR Portal (Spring Boot + PostgreSQL)
+type: application
+# Jenkins overrides both values with 1.0.<BUILD_NUMBER> during "helm package"
+version: 1.0.0
+appVersion: "1.0.0"

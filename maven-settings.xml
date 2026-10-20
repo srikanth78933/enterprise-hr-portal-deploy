@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven settings used by Jenkins for "mvn deploy".
+  The credentials are NOT stored here: Maven reads them from the NEXUS_USER and NEXUS_PASS
+  environment variables, which Jenkins sets from the "nexus-credentials" credential.
+  The server id must match the id in -DaltDeploymentRepository=nexus-releases::<url>.
+-->
+<settings>
+    <servers>
+        <server>
+            <id>nexus-releases</id>
+            <username>${env.NEXUS_USER}</username>
+            <password>${env.NEXUS_PASS}</password>
+        </server>
+    </servers>
+</settings>

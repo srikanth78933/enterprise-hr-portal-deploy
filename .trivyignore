@@ -1,0 +1,11 @@
+# Vulnerabilities accepted after review. Trivy reads this file automatically
+# because the pipeline runs trivy from the root of this repository.
+# Review this list whenever Spring Boot is upgraded.
+
+# spring-webmvc 6.2.x: RCE via XsltView. Fixed only in Spring Framework 7 (Spring Boot 4).
+# Not exploitable here: the application uses Thymeleaf views only, never XsltView.
+CVE-2026-47884
+
+# spring-webmvc 6.2.x: stream corruption in Server-Sent Events with views. Fixed only in Spring Framework 7.
+# Not exploitable here: the application does not use Server-Sent Events.
+CVE-2026-47890

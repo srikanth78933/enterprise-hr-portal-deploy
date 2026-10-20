@@ -1,0 +1,11 @@
+# Created by the pipeline in the Jenkins workspace
+app/
+helm-packages/
+trivy-report.txt
+*.tgz
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

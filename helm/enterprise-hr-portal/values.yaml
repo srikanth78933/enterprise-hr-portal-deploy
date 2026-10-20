@@ -1,0 +1,33 @@
+# Number of application pods
+replicaCount: 2
+
+image:
+  repository: devopstraining064/enterprise-hr-portal
+  # Jenkins sets the tag with --set image.tag=<version>
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Port the Spring Boot application listens on inside the container
+containerPort: 8080
+
+service:
+  # LoadBalancer creates an AWS load balancer so the UI is reachable from the browser.
+  # Use ClusterIP if you expose the app through an Ingress instead.
+  type: LoadBalancer
+  port: 80
+
+database:
+  # Name of an existing Kubernetes Secret with the keys:
+  #   DB_HOST, DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD
+  # Create it once per namespace (see README). Passwords are never stored in this repo.
+  secretName: enterprise-hr-portal-db
+  # "require" forces SSL, which AWS RDS supports by default
+  sslMode: require
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 768Mi
