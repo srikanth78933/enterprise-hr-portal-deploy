@@ -200,7 +200,7 @@ aws eks create-access-entry --cluster-name <cluster> --region <region> \
 
 aws eks associate-access-policy --cluster-name <cluster> --region <region> \
   --principal-arn arn:aws:iam::<account-id>:user/<jenkins-iam-user> \
-  --policy-arn arn:aws:eks::aws:policy/AmazonEKSClusterAdminPolicy \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
   --access-scope type=cluster
 ```
 
