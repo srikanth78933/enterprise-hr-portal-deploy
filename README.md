@@ -19,7 +19,28 @@ enterprise-hr-portal-deploy/
 └── helm/enterprise-hr-portal/  Helm chart
     ├── Chart.yaml
     ├── values.yaml
-    └── templates/              deployment.yaml, service.yaml, _helpers.tpl, NOTES.txt
+    └── templates/
+        ├── configmap.yaml            Non-sensitive settings (DB host/port/name, SSL mode, port)
+        ├── secretproviderclass.yaml  DB username/password from AWS Secrets Manager
+        ├── serviceaccount.yaml       IAM role (IRSA) allowed to read the secret
+        ├── deployment.yaml           Pods, probes, ConfigMap + secret wiring
+        ├── service.yaml              LoadBalancer (or ClusterIP with Ingress)
+        ├── hpa.yaml                  Autoscaling 2–5 pods on CPU/memory
+        ├── pdb.yaml                  Keeps at least 1 pod during node drains
+        ├── ingress.yaml              Optional ALB Ingress (disabled by default)
+        ├── _helpers.tpl              Shared labels
+        └── NOTES.txt                 Shown after install
+```
+
+### How the configuration reaches the pods
+
+```
+values.yaml ──► ConfigMap ─────────────────────────────────┐ DB_HOST, DB_PORT, DB_NAME,
+                                                           │ DB_SSL_MODE, SERVER_PORT
+AWS Secrets Manager ──► SecretProviderClass (CSI driver) ──┤
+  "enterprise-hr-portal/db"     │ uses the ServiceAccount  │ DB_USERNAME, DB_PASSWORD
+                                │ IAM role (IRSA)          ▼
+                                └─► synced K8s Secret ──► Deployment (env variables)
 ```
 
 Each build uses one version everywhere: **`1.0.<BUILD_NUMBER>`** → JAR version in Nexus,
@@ -34,7 +55,14 @@ Edit the `environment` block at the top of the `Jenkinsfile`:
 | `NEXUS_URL`    | `http://<nexus-ec2-ip>:8081` |
 | `DOCKER_IMAGE` | `<your-dockerhub-user>/enterprise-hr-portal` |
 | `EKS_CLUSTER`  | Your EKS cluster name |
-| `AWS_REGION`   | Region of the EKS cluster |
+| `AWS_REGION`   | Region of the EKS cluster (also used for Secrets Manager) |
+
+And two values in `helm/enterprise-hr-portal/values.yaml`:
+
+| Value                    | Set it to |
+|--------------------------|-----------|
+| `config.dbHost`          | Your RDS endpoint |
+| `serviceAccount.roleArn` | ARN of the IAM role created in setup step 8 |
 
 ## One-time setup
 
@@ -119,24 +147,93 @@ aws eks associate-access-policy --cluster-name <cluster> --region <region> \
   --access-scope type=cluster
 ```
 
-### 8. Database (AWS RDS PostgreSQL) and Kubernetes Secret
+### 8. Database and AWS Secrets Manager
 
-1. Create an RDS PostgreSQL instance with initial database name **`employee_db`**.
-2. Allow inbound **TCP 5432** on the RDS security group from the EKS node security group.
-3. Create the namespace and the database Secret once (Flyway creates the tables on first start):
+Run these from a machine with `aws`, `eksctl`, `kubectl` and `helm` configured for the cluster.
 
 ```bash
-kubectl create namespace hr-portal
-
-kubectl create secret generic enterprise-hr-portal-db -n hr-portal \
-  --from-literal=DB_HOST=<rds-endpoint>.rds.amazonaws.com \
-  --from-literal=DB_PORT=5432 \
-  --from-literal=DB_NAME=employee_db \
-  --from-literal=DB_USERNAME=<db-user> \
-  --from-literal=DB_PASSWORD='<db-password>'
+export CLUSTER=mycompany-dev-eks
+export REGION=us-east-1
+export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ```
 
-The password lives only in this Secret, never in Git or Jenkins.
+**a) RDS PostgreSQL**
+
+1. Create an RDS PostgreSQL instance with initial database name **`employee_db`**
+   (Flyway creates the tables on the first application start).
+2. Allow inbound **TCP 5432** on the RDS security group from the EKS node security group.
+3. Put the RDS endpoint in `values.yaml` → `config.dbHost`.
+
+**b) Store the DB credentials in Secrets Manager**
+
+```bash
+aws secretsmanager create-secret --region $REGION \
+  --name enterprise-hr-portal/db \
+  --secret-string '{"username":"<db-user>","password":"<db-password>"}'
+```
+
+The password exists only in Secrets Manager: never in Git, Jenkins or Helm values.
+
+**c) Install the Secrets Store CSI driver and the AWS provider (once per cluster)**
+
+```bash
+helm repo add secrets-store-csi-driver https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts
+helm repo add aws-secrets-manager https://aws.github.io/secrets-store-csi-driver-provider-aws
+helm repo update
+
+# syncSecret.enabled=true lets the driver copy the values into a Kubernetes Secret
+helm install csi-secrets-store secrets-store-csi-driver/secrets-store-csi-driver \
+  -n kube-system --set syncSecret.enabled=true
+
+helm install secrets-provider-aws aws-secrets-manager/secrets-store-csi-driver-provider-aws \
+  -n kube-system
+```
+
+**d) IAM role for the application's ServiceAccount (IRSA)**
+
+```bash
+eksctl utils associate-iam-oidc-provider --cluster $CLUSTER --region $REGION --approve
+
+cat > secrets-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"],
+    "Resource": "arn:aws:secretsmanager:${REGION}:${ACCOUNT_ID}:secret:enterprise-hr-portal/db-*"
+  }]
+}
+EOF
+
+aws iam create-policy --policy-name enterprise-hr-portal-secrets-policy \
+  --policy-document file://secrets-policy.json
+
+# --role-only: creates just the IAM role; the ServiceAccount itself comes from the Helm chart
+eksctl create iamserviceaccount --cluster $CLUSTER --region $REGION \
+  --namespace hr-portal --name enterprise-hr-portal \
+  --role-name enterprise-hr-portal-secrets-role \
+  --attach-policy-arn arn:aws:iam::${ACCOUNT_ID}:policy/enterprise-hr-portal-secrets-policy \
+  --role-only --approve
+```
+
+Put `arn:aws:iam::<account-id>:role/enterprise-hr-portal-secrets-role` in `values.yaml` →
+`serviceAccount.roleArn`. The namespace (`hr-portal`) and ServiceAccount name
+(`enterprise-hr-portal`) must stay as shown, because the role trusts exactly that pair.
+
+**e) metrics-server (needed by the HPA)**
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+kubectl top nodes   # works after ~1 minute
+```
+
+**Rotating the password:** update the secret in Secrets Manager, then restart the pods with
+`kubectl rollout restart deploy/enterprise-hr-portal -n hr-portal`.
+
+### 9. Optional: ALB Ingress instead of a LoadBalancer Service
+
+If the AWS Load Balancer Controller is installed, set in `values.yaml`:
+`ingress.enabled: true` and `service.type: ClusterIP`.
 
 ## Create the Jenkins job
 
@@ -150,7 +247,7 @@ Jenkins checks out this repository, then the pipeline checks out the application
 ## Open the application
 
 ```bash
-kubectl get pods,svc -n hr-portal
+kubectl get pods,svc,hpa,pdb -n hr-portal
 kubectl get svc enterprise-hr-portal -n hr-portal -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
 ```
 

@@ -146,12 +146,13 @@ pipeline {
                     aws eks update-kubeconfig --region $AWS_REGION --name $EKS_CLUSTER
 
                     helm upgrade --install $APP_NAME helm-packages/$APP_NAME-$APP_VERSION.tgz \
-                        --namespace $K8S_NAMESPACE \
+                        --namespace $K8S_NAMESPACE --create-namespace \
                         --set image.repository=$DOCKER_IMAGE \
                         --set image.tag=$APP_VERSION \
+                        --set awsSecretsManager.region=$AWS_REGION \
                         --wait --timeout 10m
 
-                    kubectl get pods,svc -n $K8S_NAMESPACE
+                    kubectl get pods,svc,hpa,pdb -n $K8S_NAMESPACE
                 '''
             }
         }

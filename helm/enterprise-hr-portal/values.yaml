@@ -1,28 +1,81 @@
-# Number of application pods
-replicaCount: 2
-
+# ---------------------------------------------------------------
+# Image (Jenkins sets image.repository and image.tag on every deploy)
+# ---------------------------------------------------------------
 image:
   repository: devopstraining064/enterprise-hr-portal
-  # Jenkins sets the tag with --set image.tag=<version>
   tag: "latest"
   pullPolicy: IfNotPresent
+
+# Used only when autoscaling.enabled is false
+replicaCount: 2
 
 # Port the Spring Boot application listens on inside the container
 containerPort: 8080
 
+# ---------------------------------------------------------------
+# ConfigMap: non-sensitive application settings
+# ---------------------------------------------------------------
+config:
+  # CHANGE ME: endpoint of your RDS PostgreSQL instance
+  dbHost: "CHANGE-ME.xxxxxxxxxxxx.us-east-1.rds.amazonaws.com"
+  dbPort: "5432"
+  dbName: "employee_db"
+  # "require" forces SSL, which AWS RDS supports by default
+  dbSslMode: "require"
+  javaToolOptions: "-XX:MaxRAMPercentage=75.0"
+
+# ---------------------------------------------------------------
+# AWS Secrets Manager (read through the Secrets Store CSI driver)
+# The secret must be JSON with "username" and "password" keys, for example:
+#   {"username":"employee_user","password":"..."}
+# (RDS-managed master user secrets already use this format.)
+# ---------------------------------------------------------------
+awsSecretsManager:
+  secretName: "enterprise-hr-portal/db"
+  # Jenkins sets this from AWS_REGION
+  region: "us-east-1"
+
+# ---------------------------------------------------------------
+# ServiceAccount linked to an IAM role (IRSA) that can read the secret above
+# ---------------------------------------------------------------
+serviceAccount:
+  # CHANGE ME: ARN of the IAM role created for this service account (see README)
+  roleArn: "arn:aws:iam::123456789012:role/enterprise-hr-portal-secrets-role"
+
+# ---------------------------------------------------------------
+# Service
+# LoadBalancer creates an AWS load balancer so the UI is reachable from the browser.
+# Set it to ClusterIP when using the Ingress below.
+# ---------------------------------------------------------------
 service:
-  # LoadBalancer creates an AWS load balancer so the UI is reachable from the browser.
-  # Use ClusterIP if you expose the app through an Ingress instead.
   type: LoadBalancer
   port: 80
 
-database:
-  # Name of an existing Kubernetes Secret with the keys:
-  #   DB_HOST, DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD
-  # Create it once per namespace (see README). Passwords are never stored in this repo.
-  secretName: enterprise-hr-portal-db
-  # "require" forces SSL, which AWS RDS supports by default
-  sslMode: require
+# ---------------------------------------------------------------
+# Ingress (optional). Requires the AWS Load Balancer Controller in the cluster.
+# ---------------------------------------------------------------
+ingress:
+  enabled: false
+  className: alb
+  # Leave empty to accept any host name
+  host: ""
+
+# ---------------------------------------------------------------
+# HorizontalPodAutoscaler (requires metrics-server in the cluster)
+# ---------------------------------------------------------------
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# ---------------------------------------------------------------
+# PodDisruptionBudget: keep at least this many pods during node drains/upgrades
+# ---------------------------------------------------------------
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
 
 resources:
   requests:

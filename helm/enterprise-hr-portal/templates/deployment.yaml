@@ -5,7 +5,10 @@ metadata:
   labels:
     {{- include "enterprise-hr-portal.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
+  # When autoscaling is enabled the HPA controls the number of pods
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -18,7 +21,11 @@ spec:
     metadata:
       labels:
         {{- include "enterprise-hr-portal.labels" . | nindent 8 }}
+      annotations:
+        # Restart the pods automatically when the ConfigMap changes
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
+      serviceAccountName: {{ .Release.Name }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -30,15 +37,27 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.containerPort }}
-          env:
-            - name: SERVER_PORT
-              value: {{ .Values.containerPort | quote }}
-            - name: DB_SSL_MODE
-              value: {{ .Values.database.sslMode | quote }}
-          # DB_HOST, DB_PORT, DB_NAME, DB_USERNAME and DB_PASSWORD come from the Secret
+          # Non-sensitive settings from the ConfigMap
           envFrom:
-            - secretRef:
-                name: {{ .Values.database.secretName }}
+            - configMapRef:
+                name: {{ .Release.Name }}-config
+          # Credentials from AWS Secrets Manager (synced into a Kubernetes Secret by the CSI driver)
+          env:
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-db
+                  key: DB_USERNAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-db
+                  key: DB_PASSWORD
+          # The CSI volume must be mounted for the driver to fetch and sync the secret
+          volumeMounts:
+            - name: aws-secrets
+              mountPath: /mnt/secrets-store
+              readOnly: true
           # Gives Spring Boot and Flyway up to 3 minutes to start
           startupProbe:
             httpGet:
@@ -62,3 +81,10 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
+      volumes:
+        - name: aws-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Release.Name }}-aws-secrets
