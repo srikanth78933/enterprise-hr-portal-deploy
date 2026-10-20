@@ -1,68 +1,125 @@
 # Enterprise HR Portal – Deployment
 
 Jenkins CI/CD pipeline, Dockerfile and Helm chart that build and deploy
-[Enterprise HR Portal](https://github.com/srikanth78933/Enterprise-HR-Management-System) to AWS EKS.
+[Enterprise HR Portal](https://github.com/srikanth78933/Enterprise-HR-Management-System) to AWS EKS,
+for the **dev** and **prod** environments.
 
 ```
 Git ─► Maven (build + tests) ─► SonarQube (+ quality gate) ─► Nexus (JAR)
-    ─► Docker image ─► Trivy scan ─► Docker Hub ─► Helm package ─► EKS
+    ─► Docker image ─► Trivy scan ─► Docker Hub ─► Helm package ─► [prod approval] ─► EKS
 ```
 
 ## Repository contents
 
 ```
 enterprise-hr-portal-deploy/
-├── Jenkinsfile                 Declarative pipeline (all stages above)
-├── Dockerfile                  Runtime image (Java 21 JRE, non-root user)
-├── maven-settings.xml          Nexus credentials read from environment variables
-├── .trivyignore                Reviewed/accepted CVEs with reasons
-└── helm/enterprise-hr-portal/  Helm chart
+├── Jenkinsfile                   Declarative pipeline, parameter ENVIRONMENT = dev | prod
+├── Dockerfile                    Runtime image (Java 21 JRE, non-root user)
+├── maven-settings.xml            Nexus credentials read from environment variables
+├── .trivyignore                  Reviewed/accepted CVEs with reasons
+├── environments/
+│   ├── dev/values.yaml           Dev overrides: HPA, resources, PDB, secret name, IAM role
+│   └── prod/values.yaml          Prod overrides
+├── config/
+│   ├── env-dev.yaml              Dev environment variables (ConfigMap)
+│   └── env-prod.yaml             Prod environment variables (ConfigMap)
+└── helm/enterprise-hr-portal/    Helm chart (same chart for every environment)
     ├── Chart.yaml
-    ├── values.yaml
+    ├── values.yaml               GLOBAL defaults for all environments
     └── templates/
-        ├── configmap.yaml            Non-sensitive settings (DB host/port/name, SSL mode, port)
-        ├── secretproviderclass.yaml  DB username/password from AWS Secrets Manager
+        ├── configmap.yaml            All "env" keys → environment variables
+        ├── secretproviderclass.yaml  "secrets.keys" from AWS Secrets Manager
         ├── serviceaccount.yaml       IAM role (IRSA) allowed to read the secret
         ├── deployment.yaml           Pods, probes, ConfigMap + secret wiring
         ├── service.yaml              LoadBalancer (or ClusterIP with Ingress)
-        ├── hpa.yaml                  Autoscaling 2–5 pods on CPU/memory
-        ├── pdb.yaml                  Keeps at least 1 pod during node drains
+        ├── hpa.yaml                  Autoscaling on CPU/memory
+        ├── pdb.yaml                  Keeps pods available during node drains
         ├── ingress.yaml              Optional ALB Ingress (disabled by default)
         ├── _helpers.tpl              Shared labels
         └── NOTES.txt                 Shown after install
 ```
 
-### How the configuration reaches the pods
+## How environments work
+
+Helm combines three layers. **Later files win**, and maps are merged key by key, so an
+environment file only contains what is different:
 
 ```
-values.yaml ──► ConfigMap ─────────────────────────────────┐ DB_HOST, DB_PORT, DB_NAME,
-                                                           │ DB_SSL_MODE, SERVER_PORT
-AWS Secrets Manager ──► SecretProviderClass (CSI driver) ──┤
-  "enterprise-hr-portal/db"     │ uses the ServiceAccount  │ DB_USERNAME, DB_PASSWORD
-                                │ IAM role (IRSA)          ▼
-                                └─► synced K8s Secret ──► Deployment (env variables)
+1. helm/enterprise-hr-portal/values.yaml   global defaults (packaged inside the chart)
+2. environments/<env>/values.yaml          environment overrides
+3. config/env-<env>.yaml                   environment variables for that environment
 ```
+
+Jenkins deploys with:
+
+```bash
+helm upgrade --install enterprise-hr-portal <chart.tgz> \
+  -f environments/<env>/values.yaml -f config/env-<env>.yaml ...
+```
+
+The packaged chart is identical for dev and prod; only the environment files differ.
+
+### Environment variables (`env`)
+
+Every key under `env:` becomes an environment variable in the pods (through the ConfigMap).
+Common defaults (`DB_PORT`, `DB_NAME`, `DB_SSL_MODE`, `JAVA_TOOL_OPTIONS`) are in the global
+`values.yaml`; `config/env-<env>.yaml` adds or overrides keys. `DB_HOST` is required there.
+To add a new variable, add one line, for example `FEATURE_X_ENABLED: "true"`.
+
+### Secrets (`secrets`)
+
+Only the **name** of the Secrets Manager secret and the **key names** are in Git, never the values:
+
+```yaml
+secrets:
+  awsSecretName: "enterprise-hr-portal/dev/db"   # set per environment
+  keys:                                          # <ENV_VARIABLE>: <json key in the secret>
+    DB_USERNAME: username
+    DB_PASSWORD: password
+```
+
+`keys` is defined globally; an environment can add a key (for example `API_TOKEN: api_token`)
+and it is merged with the global ones. Every key must exist in that environment's secret.
+
+```
+config/env-<env>.yaml ─► ConfigMap ──────────────────────────┐ DB_HOST, DB_PORT, DB_NAME, ...
+                                                             │
+AWS Secrets Manager ─► SecretProviderClass (CSI driver) ─────┤
+  enterprise-hr-portal/<env>/db  │ ServiceAccount IAM role   │ DB_USERNAME, DB_PASSWORD
+                                 └─► synced K8s Secret ──────┴─► Deployment (env variables)
+```
+
+### Differences between dev and prod
+
+| Setting                | dev                              | prod                              |
+|------------------------|----------------------------------|-----------------------------------|
+| EKS cluster            | `mycompany-dev-eks`              | `mycompany-prod-eks`              |
+| Namespace              | `hr-portal-dev`                  | `hr-portal-prod`                  |
+| Pods (HPA min–max)     | 1–2                              | 2–6                               |
+| PodDisruptionBudget    | off                              | minAvailable 1                    |
+| CPU / memory requests  | 200m / 512Mi                     | 500m / 768Mi                      |
+| Secrets Manager secret | `enterprise-hr-portal/dev/db`    | `enterprise-hr-portal/prod/db`    |
+| Log level (app)        | DEBUG                            | INFO                              |
+| Deploy approval        | automatic                        | manual approval in Jenkins        |
 
 Each build uses one version everywhere: **`1.0.<BUILD_NUMBER>`** → JAR version in Nexus,
 Docker image tag, Helm chart version and app version.
 
 ## Values to change before the first run
 
-Edit the `environment` block at the top of the `Jenkinsfile`:
+| File                              | Value                    | Set it to |
+|-----------------------------------|--------------------------|-----------|
+| `Jenkinsfile`                     | `NEXUS_URL`              | `http://<nexus-ec2-ip>:8081` |
+| `Jenkinsfile`                     | `DOCKER_IMAGE`           | `<your-dockerhub-user>/enterprise-hr-portal` |
+| `Jenkinsfile`                     | `EKS_CLUSTER`            | Cluster name pattern (default `mycompany-<env>-eks`) |
+| `Jenkinsfile`                     | `AWS_REGION`             | Region of the clusters and Secrets Manager |
+| `config/env-dev.yaml`             | `env.DB_HOST`            | Dev RDS endpoint |
+| `config/env-prod.yaml`            | `env.DB_HOST`            | Prod RDS endpoint |
+| `environments/dev/values.yaml`    | `serviceAccount.roleArn` | Dev IAM role ARN (setup step 8d) |
+| `environments/prod/values.yaml`   | `serviceAccount.roleArn` | Prod IAM role ARN (setup step 8d) |
 
-| Variable       | Set it to |
-|----------------|-----------|
-| `NEXUS_URL`    | `http://<nexus-ec2-ip>:8081` |
-| `DOCKER_IMAGE` | `<your-dockerhub-user>/enterprise-hr-portal` |
-| `EKS_CLUSTER`  | Your EKS cluster name |
-| `AWS_REGION`   | Region of the EKS cluster (also used for Secrets Manager) |
-
-And two values in `helm/enterprise-hr-portal/values.yaml`:
-
-| Value                    | Set it to |
-|--------------------------|-----------|
-| `config.dbHost`          | Your RDS endpoint |
-| `serviceAccount.roleArn` | ARN of the IAM role created in setup step 8 |
+If dev and prod share one cluster, set `EKS_CLUSTER` to that fixed name; the namespaces
+(`hr-portal-dev`, `hr-portal-prod`) keep them separate.
 
 ## One-time setup
 
@@ -135,7 +192,7 @@ The pipeline uploads to the default **`maven-releases`** repository
 (`<NEXUS_URL>/repository/maven-releases/`). Release repositories reject the same version twice,
 which is why each build gets its own `1.0.<BUILD_NUMBER>` version.
 
-### 7. EKS access for the Jenkins IAM user
+### 7. EKS access for the Jenkins IAM user (each cluster)
 
 ```bash
 aws eks create-access-entry --cluster-name <cluster> --region <region> \
@@ -147,12 +204,14 @@ aws eks associate-access-policy --cluster-name <cluster> --region <region> \
   --access-scope type=cluster
 ```
 
-### 8. Database and AWS Secrets Manager
+### 8. Database and AWS Secrets Manager (repeat for dev and prod)
 
 Run these from a machine with `aws`, `eksctl`, `kubectl` and `helm` configured for the cluster.
+Set `ENV` to `dev` first, then repeat everything with `ENV=prod`.
 
 ```bash
-export CLUSTER=mycompany-dev-eks
+export ENV=dev                       # then: prod
+export CLUSTER=mycompany-${ENV}-eks
 export REGION=us-east-1
 export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ```
@@ -162,13 +221,13 @@ export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 1. Create an RDS PostgreSQL instance with initial database name **`employee_db`**
    (Flyway creates the tables on the first application start).
 2. Allow inbound **TCP 5432** on the RDS security group from the EKS node security group.
-3. Put the RDS endpoint in `values.yaml` → `config.dbHost`.
+3. Put the RDS endpoint in `config/env-${ENV}.yaml` → `env.DB_HOST`.
 
 **b) Store the DB credentials in Secrets Manager**
 
 ```bash
 aws secretsmanager create-secret --region $REGION \
-  --name enterprise-hr-portal/db \
+  --name enterprise-hr-portal/${ENV}/db \
   --secret-string '{"username":"<db-user>","password":"<db-password>"}'
 ```
 
@@ -194,33 +253,33 @@ helm install secrets-provider-aws aws-secrets-manager/secrets-store-csi-driver-p
 ```bash
 eksctl utils associate-iam-oidc-provider --cluster $CLUSTER --region $REGION --approve
 
-cat > secrets-policy.json <<EOF
+cat > secrets-policy-${ENV}.json <<EOF
 {
   "Version": "2012-10-17",
   "Statement": [{
     "Effect": "Allow",
     "Action": ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"],
-    "Resource": "arn:aws:secretsmanager:${REGION}:${ACCOUNT_ID}:secret:enterprise-hr-portal/db-*"
+    "Resource": "arn:aws:secretsmanager:${REGION}:${ACCOUNT_ID}:secret:enterprise-hr-portal/${ENV}/db-*"
   }]
 }
 EOF
 
-aws iam create-policy --policy-name enterprise-hr-portal-secrets-policy \
-  --policy-document file://secrets-policy.json
+aws iam create-policy --policy-name enterprise-hr-portal-${ENV}-secrets-policy \
+  --policy-document file://secrets-policy-${ENV}.json
 
 # --role-only: creates just the IAM role; the ServiceAccount itself comes from the Helm chart
 eksctl create iamserviceaccount --cluster $CLUSTER --region $REGION \
-  --namespace hr-portal --name enterprise-hr-portal \
-  --role-name enterprise-hr-portal-secrets-role \
-  --attach-policy-arn arn:aws:iam::${ACCOUNT_ID}:policy/enterprise-hr-portal-secrets-policy \
+  --namespace hr-portal-${ENV} --name enterprise-hr-portal \
+  --role-name enterprise-hr-portal-${ENV}-secrets-role \
+  --attach-policy-arn arn:aws:iam::${ACCOUNT_ID}:policy/enterprise-hr-portal-${ENV}-secrets-policy \
   --role-only --approve
 ```
 
-Put `arn:aws:iam::<account-id>:role/enterprise-hr-portal-secrets-role` in `values.yaml` →
-`serviceAccount.roleArn`. The namespace (`hr-portal`) and ServiceAccount name
-(`enterprise-hr-portal`) must stay as shown, because the role trusts exactly that pair.
+Put `arn:aws:iam::<account-id>:role/enterprise-hr-portal-<env>-secrets-role` in
+`environments/<env>/values.yaml` → `serviceAccount.roleArn`. Each role trusts exactly one
+namespace + ServiceAccount pair, so the dev pods cannot read the prod secret and vice versa.
 
-**e) metrics-server (needed by the HPA)**
+**e) metrics-server (needed by the HPA, once per cluster)**
 
 ```bash
 kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
@@ -228,30 +287,41 @@ kubectl top nodes   # works after ~1 minute
 ```
 
 **Rotating the password:** update the secret in Secrets Manager, then restart the pods with
-`kubectl rollout restart deploy/enterprise-hr-portal -n hr-portal`.
+`kubectl rollout restart deploy/enterprise-hr-portal -n hr-portal-<env>`.
 
 ### 9. Optional: ALB Ingress instead of a LoadBalancer Service
 
-If the AWS Load Balancer Controller is installed, set in `values.yaml`:
-`ingress.enabled: true` and `service.type: ClusterIP`.
+If the AWS Load Balancer Controller is installed, set in `environments/<env>/values.yaml`:
+
+```yaml
+service:
+  type: ClusterIP
+ingress:
+  enabled: true
+  host: "hr-dev.example.com"   # optional
+```
 
 ## Create the Jenkins job
 
 1. **New Item** → name `enterprise-hr-portal` → **Pipeline**.
 2. **Pipeline → Definition**: *Pipeline script from SCM*.
 3. **SCM**: Git, URL `https://github.com/srikanth78933/enterprise-hr-portal-deploy.git`, branch `*/main`.
-4. **Script Path**: `Jenkinsfile` → **Save** → **Build Now**.
+4. **Script Path**: `Jenkinsfile` → **Save**.
+5. Click **Build Now** once (Jenkins learns the `ENVIRONMENT` parameter and deploys to dev).
+   After that, use **Build with Parameters** and choose `dev` or `prod`.
 
-Jenkins checks out this repository, then the pipeline checks out the application code into `./app`.
+For `prod`, the pipeline pauses at **Approve Production**; click **Deploy** in the build page
+(within 30 minutes) to continue.
 
 ## Open the application
 
 ```bash
-kubectl get pods,svc,hpa,pdb -n hr-portal
-kubectl get svc enterprise-hr-portal -n hr-portal -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+kubectl get pods,svc,hpa,pdb -n hr-portal-dev
+kubectl get svc enterprise-hr-portal -n hr-portal-dev -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
 ```
 
 Open `http://<load-balancer-hostname>` in the browser (allow 2–3 minutes for the load balancer DNS).
+Use `hr-portal-prod` for production.
 
 ## Pipeline stages
 
@@ -265,16 +335,22 @@ Open `http://<load-balancer-hostname>` in the browser (allow 2–3 minutes for t
 | Build Docker Image       | Builds `DOCKER_IMAGE:1.0.<BUILD_NUMBER>` from `app/target` |
 | Trivy Image Scan         | Archives a HIGH/CRITICAL report; fails on fixable CRITICAL vulnerabilities |
 | Push Image to Docker Hub | Pushes the image |
-| Helm Package             | `helm lint` + `helm package`, archives the chart `.tgz` |
-| Deploy to EKS            | `helm upgrade --install` and waits until the pods are ready |
+| Helm Package             | `helm lint` with the environment files + `helm package`, archives the chart `.tgz` |
+| Approve Production       | Only for `prod`: waits for a manual approval |
+| Deploy to EKS            | `helm upgrade --install` with the environment files, waits until the pods are ready |
 
 ## Useful commands
 
 ```bash
-helm list -n hr-portal                                  # deployed releases
-helm history enterprise-hr-portal -n hr-portal          # release history
-helm rollback enterprise-hr-portal <revision> -n hr-portal
-kubectl logs -n hr-portal deploy/enterprise-hr-portal   # application logs
+helm list -n hr-portal-dev                                       # deployed releases
+helm history enterprise-hr-portal -n hr-portal-dev               # release history
+helm rollback enterprise-hr-portal <revision> -n hr-portal-dev   # roll back
+helm get values enterprise-hr-portal -n hr-portal-dev            # values used by the release
+kubectl logs -n hr-portal-dev deploy/enterprise-hr-portal        # application logs
+
+# Preview what an environment renders to, without deploying
+helm template enterprise-hr-portal helm/enterprise-hr-portal \
+  -f environments/prod/values.yaml -f config/env-prod.yaml
 ```
 
 ## Accepted vulnerabilities (`.trivyignore`)

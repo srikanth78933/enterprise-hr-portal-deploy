@@ -3,6 +3,10 @@
 pipeline {
     agent any
 
+    parameters {
+        choice(name: 'ENVIRONMENT', choices: ['dev', 'prod'], description: 'Environment to deploy to')
+    }
+
     tools {
         maven 'maven3.9.16'
         jdk 'java21'
@@ -21,10 +25,13 @@ pipeline {
         // Docker Hub image
         DOCKER_IMAGE  = 'devopstraining064/enterprise-hr-portal'
 
-        // EKS
-        EKS_CLUSTER   = 'mycompany-dev-eks'
+        // EKS: one cluster and namespace per environment
+        EKS_CLUSTER   = "mycompany-${params.ENVIRONMENT}-eks"
         AWS_REGION    = 'us-east-1'
-        K8S_NAMESPACE = 'hr-portal'
+        K8S_NAMESPACE = "hr-portal-${params.ENVIRONMENT}"
+
+        // Helm values: global chart defaults + environment overrides + environment variables
+        HELM_VALUES   = "-f environments/${params.ENVIRONMENT}/values.yaml -f config/env-${params.ENVIRONMENT}.yaml"
         AWS_ACCESS_KEY_ID     = credentials('AWS_ACCESS_KEY_ID')
         AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
     }
@@ -133,10 +140,21 @@ pipeline {
             steps {
                 sh '''
                     rm -rf helm-packages
-                    helm lint helm/$APP_NAME
+                    helm lint helm/$APP_NAME $HELM_VALUES
                     helm package helm/$APP_NAME --version $APP_VERSION --app-version $APP_VERSION -d helm-packages
                 '''
                 archiveArtifacts artifacts: 'helm-packages/*.tgz'
+            }
+        }
+
+        stage('Approve Production') {
+            when {
+                expression { params.ENVIRONMENT == 'prod' }
+            }
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: "Deploy ${APP_NAME} ${APP_VERSION} to PRODUCTION?", ok: 'Deploy'
+                }
             }
         }
 
@@ -147,9 +165,10 @@ pipeline {
 
                     helm upgrade --install $APP_NAME helm-packages/$APP_NAME-$APP_VERSION.tgz \
                         --namespace $K8S_NAMESPACE --create-namespace \
+                        $HELM_VALUES \
                         --set image.repository=$DOCKER_IMAGE \
                         --set image.tag=$APP_VERSION \
-                        --set awsSecretsManager.region=$AWS_REGION \
+                        --set secrets.region=$AWS_REGION \
                         --wait --timeout 10m
 
                     kubectl get pods,svc,hpa,pdb -n $K8S_NAMESPACE
@@ -164,7 +183,7 @@ pipeline {
             sh 'docker rmi $DOCKER_IMAGE:$APP_VERSION || true'
         }
         success {
-            echo "Deployed ${APP_NAME} version ${APP_VERSION} to EKS cluster ${EKS_CLUSTER}"
+            echo "Deployed ${APP_NAME} version ${APP_VERSION} to ${params.ENVIRONMENT} (cluster ${EKS_CLUSTER}, namespace ${K8S_NAMESPACE})"
         }
         failure {
             echo 'Pipeline failed. Check the stage logs above.'

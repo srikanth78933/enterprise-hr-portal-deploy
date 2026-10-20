@@ -1,0 +1,30 @@
+# ===============================================================
+# PROD overrides (applied on top of helm/enterprise-hr-portal/values.yaml)
+# Environment variables for prod are in config/env-prod.yaml
+# ===============================================================
+
+# Secrets Manager secret for prod (JSON with "username" and "password")
+secrets:
+  awsSecretName: "enterprise-hr-portal/prod/db"
+
+# CHANGE ME: IAM role (IRSA) allowed to read the prod secret
+serviceAccount:
+  roleArn: "arn:aws:iam::123456789012:role/enterprise-hr-portal-prod-secrets-role"
+
+# Always at least 2 pods in prod
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 768Mi
+  limits:
+    cpu: "2"
+    memory: 1Gi

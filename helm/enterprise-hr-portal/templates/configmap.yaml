@@ -1,3 +1,4 @@
+# All keys from .Values.env (global values.yaml + config/env-<env>.yaml) become environment variables
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -6,8 +7,9 @@ metadata:
     {{- include "enterprise-hr-portal.labels" . | nindent 4 }}
 data:
   SERVER_PORT: {{ .Values.containerPort | quote }}
-  DB_HOST: {{ .Values.config.dbHost | quote }}
-  DB_PORT: {{ .Values.config.dbPort | quote }}
-  DB_NAME: {{ .Values.config.dbName | quote }}
-  DB_SSL_MODE: {{ .Values.config.dbSslMode | quote }}
-  JAVA_TOOL_OPTIONS: {{ .Values.config.javaToolOptions | quote }}
+  DB_HOST: {{ required "env.DB_HOST is required: set it in config/env-<env>.yaml" .Values.env.DB_HOST | quote }}
+  {{- range $key, $value := .Values.env }}
+  {{- if ne $key "DB_HOST" }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}

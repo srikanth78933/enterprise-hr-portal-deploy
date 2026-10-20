@@ -1,0 +1,11 @@
+# ===============================================================
+# PROD environment variables -> ConfigMap (non-sensitive values only!)
+# Keys here add to / override "env" in helm/enterprise-hr-portal/values.yaml.
+# Passwords and other secrets belong in AWS Secrets Manager, not here.
+# ===============================================================
+env:
+  # CHANGE ME: prod RDS endpoint
+  DB_HOST: "enterprise-hr-prod.xxxxxxxxxxxx.us-east-1.rds.amazonaws.com"
+  DB_NAME: "employee_db"
+  DB_SSL_MODE: "require"
+  LOGGING_LEVEL_COM_EXAMPLE_EMPLOYEE: "INFO"

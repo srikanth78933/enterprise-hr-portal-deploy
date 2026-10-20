@@ -41,18 +41,15 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ .Release.Name }}-config
-          # Credentials from AWS Secrets Manager (synced into a Kubernetes Secret by the CSI driver)
+          # Secrets from AWS Secrets Manager (synced into a Kubernetes Secret by the CSI driver)
           env:
-            - name: DB_USERNAME
+            {{- range $envName, $jsonKey := .Values.secrets.keys }}
+            - name: {{ $envName }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Release.Name }}-db
-                  key: DB_USERNAME
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Release.Name }}-db
-                  key: DB_PASSWORD
+                  name: {{ $.Release.Name }}-secrets
+                  key: {{ $envName }}
+            {{- end }}
           # The CSI volume must be mounted for the driver to fetch and sync the secret
           volumeMounts:
             - name: aws-secrets

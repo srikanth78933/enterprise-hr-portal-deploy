@@ -1,6 +1,11 @@
-# ---------------------------------------------------------------
+# ===============================================================
+# GLOBAL DEFAULTS for all environments.
+# Environment overrides (applied on top of this file, later files win):
+#   environments/<env>/values.yaml   replicas, HPA, resources, secret name, IAM role ...
+#   config/env-<env>.yaml            environment variables (ConfigMap)
+# ===============================================================
+
 # Image (Jenkins sets image.repository and image.tag on every deploy)
-# ---------------------------------------------------------------
 image:
   repository: devopstraining064/enterprise-hr-portal
   tag: "latest"
@@ -13,56 +18,48 @@ replicaCount: 2
 containerPort: 8080
 
 # ---------------------------------------------------------------
-# ConfigMap: non-sensitive application settings
+# Environment variables -> ConfigMap (non-sensitive values only).
+# Every key here becomes an environment variable in the pods.
+# config/env-<env>.yaml adds or overrides keys (DB_HOST is required there).
 # ---------------------------------------------------------------
-config:
-  # CHANGE ME: endpoint of your RDS PostgreSQL instance
-  dbHost: "CHANGE-ME.xxxxxxxxxxxx.us-east-1.rds.amazonaws.com"
-  dbPort: "5432"
-  dbName: "employee_db"
-  # "require" forces SSL, which AWS RDS supports by default
-  dbSslMode: "require"
-  javaToolOptions: "-XX:MaxRAMPercentage=75.0"
+env:
+  DB_PORT: "5432"
+  DB_NAME: "employee_db"
+  DB_SSL_MODE: "require"
+  JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
 
 # ---------------------------------------------------------------
-# AWS Secrets Manager (read through the Secrets Store CSI driver)
-# The secret must be JSON with "username" and "password" keys, for example:
-#   {"username":"employee_user","password":"..."}
-# (RDS-managed master user secrets already use this format.)
+# Secrets from AWS Secrets Manager (read by the Secrets Store CSI driver).
+# Only the secret NAME and KEY NAMES are configured here, never the values.
+#   awsSecretName: Secrets Manager secret (JSON), set per environment
+#   keys:          <ENV_VARIABLE>: <json key inside the secret>
 # ---------------------------------------------------------------
-awsSecretsManager:
-  secretName: "enterprise-hr-portal/db"
+secrets:
+  awsSecretName: ""
   # Jenkins sets this from AWS_REGION
   region: "us-east-1"
+  keys:
+    DB_USERNAME: username
+    DB_PASSWORD: password
 
-# ---------------------------------------------------------------
-# ServiceAccount linked to an IAM role (IRSA) that can read the secret above
-# ---------------------------------------------------------------
+# ServiceAccount linked to an IAM role (IRSA) that can read the secret above.
+# roleArn is set per environment.
 serviceAccount:
-  # CHANGE ME: ARN of the IAM role created for this service account (see README)
-  roleArn: "arn:aws:iam::123456789012:role/enterprise-hr-portal-secrets-role"
+  roleArn: ""
 
-# ---------------------------------------------------------------
-# Service
-# LoadBalancer creates an AWS load balancer so the UI is reachable from the browser.
-# Set it to ClusterIP when using the Ingress below.
-# ---------------------------------------------------------------
+# Service. LoadBalancer creates an AWS load balancer; use ClusterIP with the Ingress.
 service:
   type: LoadBalancer
   port: 80
 
-# ---------------------------------------------------------------
 # Ingress (optional). Requires the AWS Load Balancer Controller in the cluster.
-# ---------------------------------------------------------------
 ingress:
   enabled: false
   className: alb
   # Leave empty to accept any host name
   host: ""
 
-# ---------------------------------------------------------------
 # HorizontalPodAutoscaler (requires metrics-server in the cluster)
-# ---------------------------------------------------------------
 autoscaling:
   enabled: true
   minReplicas: 2
@@ -70,9 +67,7 @@ autoscaling:
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
 
-# ---------------------------------------------------------------
 # PodDisruptionBudget: keep at least this many pods during node drains/upgrades
-# ---------------------------------------------------------------
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
