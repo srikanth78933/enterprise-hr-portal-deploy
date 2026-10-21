@@ -106,32 +106,40 @@ AWS Secrets Manager ─► SecretProviderClass (CSI driver) ─────┤
 Each build uses one version everywhere: **`1.0.<BUILD_NUMBER>`** → JAR version in Nexus,
 Docker image tag, Helm chart version and app version.
 
-## Values to change before the first run
+## Current settings
 
-Create the infrastructure first (see *7. Infrastructure* below). Terraform prints the values with
-`terraform output deploy_repo_values`.
+These values are already set in this repository. Terraform prints the AWS ones with
+`terraform output deploy_repo_values` (infra repo); update them if you recreate the
+infrastructure in another account or region.
 
-| File                              | Value                    | Set it to |
-|-----------------------------------|--------------------------|-----------|
-| `Jenkinsfile`                     | `NEXUS_URL`              | `http://<nexus-ec2-ip>:8081` |
-| `Jenkinsfile`                     | `DOCKER_IMAGE`           | `<your-dockerhub-user>/enterprise-hr-portal` |
-| `Jenkinsfile`                     | `AWS_REGION`             | Region of the infrastructure (default `ap-south-1`) |
-| `config/env-<env>.yaml`           | `env.DB_HOST`            | Terraform output `rds_endpoint` |
-| `environments/<env>/values.yaml`  | `serviceAccount.roleArn` | Terraform output `app_irsa_role_arn` |
-| `environments/prod/values.yaml`   | `ingress.wafAclArn`      | Terraform output `waf_web_acl_arn` |
-| `environments/<env>/values.yaml`  | `ingress.certificateArn` | Optional ACM certificate ARN for HTTPS |
+| File                              | Value                    | Current setting |
+|-----------------------------------|--------------------------|-----------------|
+| `Jenkinsfile`                     | `NEXUS_URL`              | `http://13.203.97.33:8081` (repository `maven-releases`) |
+| `Jenkinsfile`                     | `DOCKER_IMAGE`           | `devopstraining064/hr-portal` |
+| `Jenkinsfile`                     | `AWS_REGION`             | `ap-south-1` |
+| `Jenkinsfile`                     | Tools                    | Maven `maven3.10.0`, JDK `java21` |
+| `config/env-dev.yaml`             | `env.DB_HOST`            | `enterprise-hr-portal-dev.c58yuau4wywi.ap-south-1.rds.amazonaws.com` |
+| `config/env-prod.yaml`            | `env.DB_HOST`            | `enterprise-hr-portal-prod.c58yuau4wywi.ap-south-1.rds.amazonaws.com` |
+| `environments/<env>/values.yaml`  | `serviceAccount.roleArn` | `arn:aws:iam::476079000065:role/enterprise-hr-portal-<env>-secrets-role` |
+| `environments/prod/values.yaml`   | `ingress.wafAclArn`      | empty; set it to Terraform output `waf_web_acl_arn` (changes each time prod is recreated) |
+| `environments/<env>/values.yaml`  | `ingress.certificateArn` | empty (HTTP only); set an ACM certificate ARN for HTTPS |
 
 `EKS_CLUSTER` (`mycompany-<env>-eks`) and the secret name (`enterprise-hr-portal/<env>/db`)
-already match the infra repo.
+match the infra repo. RDS endpoints and role ARNs stay the same when an environment is
+destroyed and recreated in the same account and region.
 
 ## One-time setup
 
 ### 1. Tools on the Jenkins server (Ubuntu)
 
+The Jenkins server needs at least **30 GB of disk** (Docker images, the Trivy database, Maven
+and Terraform caches). The same server also runs the infra pipeline (Terraform) and the
+monitoring pipeline (`jq`).
+
 ```bash
-# Docker (and allow Jenkins to use it)
+# Base packages, Java 21, Docker (and allow Jenkins to use it)
 sudo apt update
-sudo apt install -y docker.io unzip curl wget gnupg
+sudo apt install -y docker.io unzip curl wget gnupg jq openjdk-21-jdk
 sudo usermod -aG docker jenkins
 
 # Trivy
@@ -146,14 +154,24 @@ curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 |
 curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
 unzip -q awscliv2.zip && sudo ./aws/install
 
-# kubectl
-curl -fsSLO "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+# kubectl (same minor version as the EKS cluster, 1.35)
+curl -fsSLO "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable-1.35.txt)/bin/linux/amd64/kubectl"
 sudo install -m 0755 kubectl /usr/local/bin/kubectl
+
+# Terraform (infra pipeline)
+curl -fsSLo /tmp/terraform.zip https://releases.hashicorp.com/terraform/1.13.4/terraform_1.13.4_linux_amd64.zip
+sudo unzip -o /tmp/terraform.zip -d /usr/local/bin && rm /tmp/terraform.zip
 
 sudo systemctl restart jenkins
 ```
 
-Check: `docker --version && trivy --version && helm version && aws --version && kubectl version --client`
+Check as the `jenkins` user:
+`sudo -u jenkins bash -c 'cd /tmp; docker ps >/dev/null && trivy --version && helm version && aws --version && kubectl version --client && terraform version && jq --version'`
+
+If `apt` reports *Could not get lock /var/lib/dpkg/lock-frontend*, the automatic security updates of a
+new instance are still running: wait until they finish (`sudo fuser /var/lib/dpkg/lock-frontend`), run
+`sudo dpkg --configure -a`, then repeat the command. If Jenkins does not start after several quick restarts
+(*start-limit-hit*), run `sudo systemctl reset-failed jenkins && sudo systemctl start jenkins`.
 
 ### 2. Jenkins plugins
 
@@ -166,8 +184,11 @@ Install from **Manage Jenkins → Plugins**: *Pipeline*, *Git*, *SonarQube Scann
 
 | Tool  | Name (must match the Jenkinsfile) |
 |-------|-----------------------------------|
-| JDK   | `java21` (JDK 21) |
-| Maven | `maven3.9.16` |
+| JDK   | `java21` (JAVA_HOME `/usr/lib/jvm/java-21-openjdk-amd64`) |
+| Maven | `maven3.10.0` (Install automatically, Maven 3.10.0) |
+
+If you name the tools differently, change the `tools { }` block in the `Jenkinsfile`; a mismatch fails
+the build at once with *Tool type "maven" does not have an install of …*.
 
 ### 4. Jenkins credentials
 
@@ -179,15 +200,17 @@ Install from **Manage Jenkins → Plugins**: *Pipeline*, *Git*, *SonarQube Scann
 | `dockerhub-credentials` | Username/password   | Docker Hub username + access token |
 | `AWS_ACCESS_KEY_ID`     | Secret text         | Access key of the IAM user used for EKS |
 | `AWS_SECRET_ACCESS_KEY` | Secret text         | Secret key of the same IAM user |
-| `sonarqube-token`       | Secret text         | SonarQube user token (My Account → Security) |
+| `sonar-token`           | Secret text         | SonarQube user token (My Account → Security) |
 
 ### 5. SonarQube
 
 1. **Manage Jenkins → System → SonarQube servers → Add**:
-   name **`sonarqube`**, URL `http://<sonar-ec2-ip>:9000`, token `sonarqube-token`.
-2. In SonarQube: **Administration → Configuration → Webhooks → Create**:
-   URL `http://<jenkins-ec2-ip>:8080/sonarqube-webhook/`.
+   name **`sonarqube`**, URL `http://15.252.238.226:9000`, token `sonar-token`.
+2. In SonarQube (as admin): **Administration → Configuration → Webhooks → Create**:
+   URL `http://65.0.177.168:8080/sonarqube-webhook/`.
    The *Quality Gate* stage waits for this webhook; without it the stage times out after 5 minutes.
+3. The default *Sonar way* quality gate requires **80% test coverage on new code**. The app produces
+   a JaCoCo coverage report during `mvn package`, so new code needs unit tests to pass the gate.
 
 ### 6. Nexus
 
@@ -283,3 +306,20 @@ helm template enterprise-hr-portal helm/enterprise-hr-portal \
 Two Spring Framework 6.2 CVEs are fixed only in Spring Framework 7 (Spring Boot 4) and do not
 apply to this application (it uses no `XsltView` and no Server-Sent Events). They are listed in
 `.trivyignore` with the reason. Review the file whenever Spring Boot is upgraded.
+
+## Troubleshooting
+
+Problems met while setting up this pipeline, and their fixes:
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `couldn't find remote ref refs/heads/master` | Job branch set to `*/master` | Branch specifier `*/main` |
+| `Tool type "maven" does not have an install of …` | Tool name in Jenkins differs from the Jenkinsfile | Use the same name in **Tools** and in `tools { }` |
+| Quality Gate `ERROR` with *Coverage on new code 0%* | New code without tests (or no coverage report) | Add unit tests; the app's JaCoCo plugin reports coverage |
+| Quality Gate stage waits 5 minutes, then fails | SonarQube webhook to Jenkins missing | Create the webhook (setup step 5) and allow port 8080 from SonarQube |
+| Trivy: `failed to download Java DB … no space left on device` | `/tmp` is a small RAM disk on Ubuntu 25.04+ | The Jenkinsfile sets `TMPDIR` to the workspace (already done) |
+| Builds fail with `no space left on device` | Jenkins disk too small | Grow the EBS volume to 30 GB+, then `growpart` + `resize2fs`; clean with `docker system prune -af` |
+| `Upload JAR to Nexus` 401 | `nexus-credentials` missing or wrong | Add the credential (setup step 4) |
+| First build has no **Build with Parameters** | Jenkins reads the parameters on the first run | Run **Build Now** once (it deploys to dev) |
+| App pods `CreateContainerConfigError` about the secret | The CSI driver could not read Secrets Manager | Check `serviceAccount.roleArn` and that the infra repo created the IRSA role |
+| Kibana / app URL stops loading | ALB recreated (new DNS name) or your IP changed | `kubectl get ingress -n hr-portal-<env>`; update `kibana_allowed_cidrs` in the infra repo |
