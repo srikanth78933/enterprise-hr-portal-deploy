@@ -111,6 +111,11 @@ pipeline {
         stage('Trivy Image Scan') {
             steps {
                 sh '''
+                    # Trivy downloads its vulnerability databases (~1 GB) through a temp folder.
+                    # /tmp can be a small RAM disk (Ubuntu 25.04+), so use the workspace disk instead.
+                    export TMPDIR="$WORKSPACE/.trivy-tmp"
+                    mkdir -p "$TMPDIR"
+
                     # Full report of HIGH and CRITICAL vulnerabilities (does not fail the build)
                     trivy image --no-progress --severity HIGH,CRITICAL --exit-code 0 \
                         --output trivy-report.txt $DOCKER_IMAGE:$APP_VERSION
