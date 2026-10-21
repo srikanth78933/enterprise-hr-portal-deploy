@@ -8,7 +8,7 @@ pipeline {
     }
 
     tools {
-        maven 'maven3.9.16'
+        maven 'maven3.10.0'
         jdk 'java21'
     }
 
@@ -19,11 +19,11 @@ pipeline {
         APP_NAME      = 'enterprise-hr-portal'
         APP_VERSION   = "1.0.${env.BUILD_NUMBER}"
 
-        // Nexus server (change NEXUS_SERVER_IP to your Nexus EC2 IP)
-        NEXUS_URL     = 'http://NEXUS_SERVER_IP:8081'
+        // Nexus server (repository maven-releases)
+        NEXUS_URL     = 'http://13.203.97.33:8081'
 
         // Docker Hub image
-        DOCKER_IMAGE  = 'devopstraining064/enterprise-hr-portal'
+        DOCKER_IMAGE  = 'devopstraining064/hr-portal'
 
         // EKS: one cluster and namespace per environment
         EKS_CLUSTER   = "mycompany-${params.ENVIRONMENT}-eks"

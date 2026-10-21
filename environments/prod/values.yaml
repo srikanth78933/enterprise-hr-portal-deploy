@@ -7,10 +7,10 @@
 secrets:
   awsSecretName: "enterprise-hr-portal/prod/db"
 
-# CHANGE ME: IAM role (IRSA) allowed to read the prod secret
+# IAM role (IRSA) allowed to read the prod secret
 # (infra repo: terraform output app_irsa_role_arn)
 serviceAccount:
-  roleArn: "arn:aws:iam::123456789012:role/enterprise-hr-portal-prod-secrets-role"
+  roleArn: "arn:aws:iam::476079000065:role/enterprise-hr-portal-prod-secrets-role"
 
 # Always at least 2 pods in prod
 autoscaling:
@@ -32,7 +32,7 @@ resources:
 
 # ALB settings for prod
 ingress:
-  # CHANGE ME: infra repo "terraform output waf_web_acl_arn" (leave empty for no WAF)
+  # infra repo "terraform output waf_web_acl_arn" (the ARN changes each time prod is recreated; empty = no WAF)
   wafAclArn: ""
   # Optional: ACM certificate ARN to enable HTTPS (443) with an 80 -> 443 redirect
   certificateArn: ""

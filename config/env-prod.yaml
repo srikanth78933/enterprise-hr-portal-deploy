@@ -4,8 +4,8 @@
 # Passwords and other secrets belong in AWS Secrets Manager, not here.
 # ===============================================================
 env:
-  # CHANGE ME: prod RDS endpoint (infra repo: terraform output rds_endpoint)
-  DB_HOST: "enterprise-hr-prod.xxxxxxxxxxxx.ap-south-1.rds.amazonaws.com"
+  # prod RDS endpoint (infra repo: terraform output rds_endpoint)
+  DB_HOST: "enterprise-hr-portal-prod.c58yuau4wywi.ap-south-1.rds.amazonaws.com"
   DB_NAME: "employee_db"
   DB_SSL_MODE: "require"
   LOGGING_LEVEL_COM_EXAMPLE_EMPLOYEE: "INFO"

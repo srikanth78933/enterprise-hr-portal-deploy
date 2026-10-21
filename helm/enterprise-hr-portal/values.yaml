@@ -7,7 +7,7 @@
 
 # Image (Jenkins sets image.repository and image.tag on every deploy)
 image:
-  repository: devopstraining064/enterprise-hr-portal
+  repository: devopstraining064/hr-portal
   tag: "latest"
   pullPolicy: IfNotPresent
 
