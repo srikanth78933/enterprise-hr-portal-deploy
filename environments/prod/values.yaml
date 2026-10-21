@@ -12,10 +12,10 @@ secrets:
 serviceAccount:
   roleArn: "arn:aws:iam::476079000065:role/enterprise-hr-portal-prod-secrets-role"
 
-# Always at least 2 pods in prod
+# Always at least 3 pods in prod; the HPA scales up to 6 under load
 autoscaling:
   enabled: true
-  minReplicas: 2
+  minReplicas: 3
   maxReplicas: 6
 
 podDisruptionBudget:

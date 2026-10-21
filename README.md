@@ -96,8 +96,8 @@ AWS Secrets Manager ─► SecretProviderClass (CSI driver) ─────┤
 |------------------------|----------------------------------|-----------------------------------|
 | EKS cluster            | `mycompany-dev-eks`              | `mycompany-prod-eks`              |
 | Namespace              | `hr-portal-dev`                  | `hr-portal-prod`                  |
-| Pods (HPA min–max)     | 1–2                              | 2–6                               |
-| PodDisruptionBudget    | off                              | minAvailable 1                    |
+| Pods (HPA min–max)     | 3–4                              | 3–6                               |
+| PodDisruptionBudget    | minAvailable 1                   | minAvailable 1                    |
 | CPU / memory requests  | 200m / 512Mi                     | 500m / 768Mi                      |
 | Secrets Manager secret | `enterprise-hr-portal/dev/db`    | `enterprise-hr-portal/prod/db`    |
 | Log level (app)        | DEBUG                            | INFO                              |
