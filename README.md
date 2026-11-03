@@ -114,10 +114,10 @@ infrastructure in another account or region.
 
 | File                              | Value                    | Current setting |
 |-----------------------------------|--------------------------|-----------------|
-| `Jenkinsfile`                     | `NEXUS_URL`              | `http://13.203.97.33:8081` (repository `maven-releases`) |
+| `Jenkinsfile`                     | `NEXUS_URL`              | `http://3.110.219.202:8081` (repository `maven-releases`) |
 | `Jenkinsfile`                     | `DOCKER_IMAGE`           | `devopstraining064/hr-portal` |
 | `Jenkinsfile`                     | `AWS_REGION`             | `ap-south-1` |
-| `Jenkinsfile`                     | Tools                    | Maven `maven3.10.0`, JDK `java21` |
+| `Jenkinsfile`                     | Tools                    | Maven `maven3.9.16`, JDK `java21` |
 | `config/env-dev.yaml`             | `env.DB_HOST`            | `enterprise-hr-portal-dev.c58yuau4wywi.ap-south-1.rds.amazonaws.com` |
 | `config/env-prod.yaml`            | `env.DB_HOST`            | `enterprise-hr-portal-prod.c58yuau4wywi.ap-south-1.rds.amazonaws.com` |
 | `environments/<env>/values.yaml`  | `serviceAccount.roleArn` | `arn:aws:iam::476079000065:role/enterprise-hr-portal-<env>-secrets-role` |
@@ -185,7 +185,7 @@ Install from **Manage Jenkins → Plugins**: *Pipeline*, *Git*, *SonarQube Scann
 | Tool  | Name (must match the Jenkinsfile) |
 |-------|-----------------------------------|
 | JDK   | `java21` (JAVA_HOME `/usr/lib/jvm/java-21-openjdk-amd64`) |
-| Maven | `maven3.10.0` (Install automatically, Maven 3.10.0) |
+| Maven | `maven3.9.16` (MAVEN_HOME `/opt/apache-maven-3.9.16`) |
 
 If you name the tools differently, change the `tools { }` block in the `Jenkinsfile`; a mismatch fails
 the build at once with *Tool type "maven" does not have an install of …*.
@@ -200,14 +200,14 @@ the build at once with *Tool type "maven" does not have an install of …*.
 | `dockerhub-credentials` | Username/password   | Docker Hub username + access token |
 | `AWS_ACCESS_KEY_ID`     | Secret text         | Access key of the IAM user used for EKS |
 | `AWS_SECRET_ACCESS_KEY` | Secret text         | Secret key of the same IAM user |
-| `sonar-token`           | Secret text         | SonarQube user token (My Account → Security) |
+| `sonarqube`             | Secret text         | SonarQube user token (My Account → Security) |
 
 ### 5. SonarQube
 
 1. **Manage Jenkins → System → SonarQube servers → Add**:
-   name **`sonarqube`**, URL `http://15.252.238.226:9000`, token `sonar-token`.
+   name **`sonar`**, URL `http://13.233.201.68:9000`, token `sonarqube`.
 2. In SonarQube (as admin): **Administration → Configuration → Webhooks → Create**:
-   URL `http://65.0.177.168:8080/sonarqube-webhook/`.
+   URL `http://44.204.78.158:8080/sonarqube-webhook/`.
    The *Quality Gate* stage waits for this webhook; without it the stage times out after 5 minutes.
 3. The default *Sonar way* quality gate requires **80% test coverage on new code**. The app produces
    a JaCoCo coverage report during `mvn package`, so new code needs unit tests to pass the gate.
@@ -250,7 +250,7 @@ so the AWS Load Balancer Controller deletes the ALB; otherwise the VPC cannot be
 
 ## Create the Jenkins job
 
-1. **New Item** → name `enterprise-hr-portal` → **Pipeline**.
+1. **New Item** → name `hr-portal-deploy` → **Pipeline**.
 2. **Pipeline → Definition**: *Pipeline script from SCM*.
 3. **SCM**: Git, URL `https://github.com/srikanth78933/enterprise-hr-portal-deploy.git`, branch `*/main`.
 4. **Script Path**: `Jenkinsfile` → **Save**.

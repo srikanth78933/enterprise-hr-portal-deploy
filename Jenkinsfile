@@ -20,7 +20,7 @@ pipeline {
         APP_VERSION   = "1.0.${env.BUILD_NUMBER}"
 
         // Nexus server (repository maven-releases)
-        NEXUS_URL     = 'http://13.203.97.33:8081'
+        NEXUS_URL     = 'http://3.110.219.202:8081'
 
         // Docker Hub image
         DOCKER_IMAGE  = 'devopstraining064/hr-portal'
@@ -68,7 +68,7 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 dir('app') {
-                    withSonarQubeEnv('sonarqube') {
+                    withSonarQubeEnv('sonar') {
                         sh '''
                             mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar \
                                 -Dsonar.projectKey=$APP_NAME \

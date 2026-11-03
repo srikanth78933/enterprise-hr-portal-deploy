@@ -9,3 +9,4 @@ trivy-report.txt
 .vscode/
 .DS_Store
 Thumbs.db
+.env
